@@ -30,7 +30,7 @@ httpClient.DefaultRequestHeaders.Add("apikey", supabaseKey);
 var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
 // ✅ Endpoint raíz
-app.MapGet("/", () => "✅ Minimal API conectada a Supabse!");
+app.MapGet("/", () => "✅ Minimal API conectada a Supabase!");
 
 /* ===========================================================
    🔹 LOGIN
@@ -64,6 +64,7 @@ app.MapPost("/login", async (HttpContext ctx) =>
     return Results.Ok(new { 
         token, 
         nombre = usuario.GetProperty("nombre").GetString(),
+        apellido = usuario.GetProperty("apellido").GetString(),
         rol = usuario.GetProperty("rol").GetString(),
         id = usuario.GetProperty("id").GetString()
     });
@@ -131,7 +132,7 @@ app.MapDelete("/medicamentos/{id}", async (Guid id) =>
    =========================================================== */
 app.MapGet("/proveedores", async () =>
 {
-    var response = await httpClient.GetAsync("proveedores?select=*");
+    var response = await httpClient.GetAsync("proveedores?select=*&order=nombre.asc");
     response.EnsureSuccessStatusCode();
     var json = await response.Content.ReadAsStringAsync();
     return Results.Content(json, "application/json");
@@ -142,6 +143,22 @@ app.MapPost("/proveedores", async (HttpContext ctx) =>
     var body = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
     var content = new StringContent(body, Encoding.UTF8, "application/json");
     var response = await httpClient.PostAsync("proveedores", content);
+    var result = await response.Content.ReadAsStringAsync();
+    return Results.Content(result, "application/json");
+});
+
+app.MapPut("/proveedores/{id}", async (Guid id, HttpContext ctx) =>
+{
+    var body = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
+    var content = new StringContent(body, Encoding.UTF8, "application/json");
+    var response = await httpClient.PatchAsync($"proveedores?id=eq.{id}", content);
+    var result = await response.Content.ReadAsStringAsync();
+    return Results.Content(result, "application/json");
+});
+
+app.MapDelete("/proveedores/{id}", async (Guid id) =>
+{
+    var response = await httpClient.DeleteAsync($"proveedores?id=eq.{id}");
     var result = await response.Content.ReadAsStringAsync();
     return Results.Content(result, "application/json");
 });
@@ -172,7 +189,7 @@ app.MapGet("/stock", async (bool? porVencer = null) =>
 app.MapGet("/stock/medicamento/{medicamentoId}", async (Guid medicamentoId) =>
 {
     var response = await httpClient.GetAsync(
-        $"stock?medicamento_id=eq.{medicamentoId}&select=*&cantidad=gt.0&order=fecha_vencimiento.asc"
+        $"stock?medicamento_id=eq.{medicamentoId}&select=*,medicamentos(nombre_comercial,presentacion)&cantidad=gt.0&order=fecha_vencimiento.asc"
     );
     response.EnsureSuccessStatusCode();
     var json = await response.Content.ReadAsStringAsync();
@@ -194,7 +211,7 @@ app.MapPost("/stock", async (HttpContext ctx) =>
    =========================================================== */
 app.MapGet("/movimientos", async (string? tipo = null) =>
 {
-    var query = "movimientos_stock?select=*,medicamentos(nombre_comercial,presentacion)";
+    var query = "movimientos_stock?select=*,medicamentos(nombre_comercial,presentacion),proveedores(nombre)";
     
     if (!string.IsNullOrEmpty(tipo))
         query += $"&tipo=eq.{tipo}";
@@ -216,21 +233,44 @@ app.MapPost("/movimientos", async (HttpContext ctx) =>
     var response = await httpClient.PostAsync("movimientos_stock", content);
     var result = await response.Content.ReadAsStringAsync();
     
-    // Si es un ingreso, también agregar/actualizar en la tabla stock
+    // 🔧 FIX: Solo actualizar tabla stock para INGRESOS
     var movimiento = JsonSerializer.Deserialize<JsonElement>(body);
     if (movimiento.GetProperty("tipo").GetString() == "INGRESO")
     {
-        var stockData = new
-        {
-            medicamento_id = movimiento.GetProperty("medicamento_id").GetString(),
-            lote = movimiento.GetProperty("lote").GetString(),
-            fecha_vencimiento = movimiento.GetProperty("fecha_vencimiento").GetString(),
-            cantidad = movimiento.GetProperty("cantidad").GetInt32(),
-            precio_unitario = movimiento.TryGetProperty("precio_unitario", out var precio) ? precio.GetDecimal() : 0
-        };
+        // Verificar si ya existe stock para este medicamento/lote
+        var medicamentoId = movimiento.GetProperty("medicamento_id").GetString();
+        var lote = movimiento.GetProperty("lote").GetString();
         
-        var stockContent = new StringContent(JsonSerializer.Serialize(stockData), Encoding.UTF8, "application/json");
-        await httpClient.PostAsync("stock", stockContent);
+        var existingStockResponse = await httpClient.GetAsync($"stock?medicamento_id=eq.{medicamentoId}&lote=eq.{lote}");
+        var existingStockJson = await existingStockResponse.Content.ReadAsStringAsync();
+        var existingStock = JsonSerializer.Deserialize<List<JsonElement>>(existingStockJson);
+        
+        if (existingStock != null && existingStock.Count > 0)
+        {
+            // Actualizar stock existente
+            var stockId = existingStock[0].GetProperty("id").GetString();
+            var cantidadActual = existingStock[0].GetProperty("cantidad").GetInt32();
+            var nuevaCantidad = cantidadActual + movimiento.GetProperty("cantidad").GetInt32();
+            
+            var updateData = new { cantidad = nuevaCantidad };
+            var updateContent = new StringContent(JsonSerializer.Serialize(updateData), Encoding.UTF8, "application/json");
+            await httpClient.PatchAsync($"stock?id=eq.{stockId}", updateContent);
+        }
+        else
+        {
+            // Crear nuevo registro de stock
+            var stockData = new
+            {
+                medicamento_id = medicamentoId,
+                lote = lote,
+                fecha_vencimiento = movimiento.GetProperty("fecha_vencimiento").GetString(),
+                cantidad = movimiento.GetProperty("cantidad").GetInt32(),
+                precio_unitario = movimiento.TryGetProperty("precio_unitario", out var precio) ? precio.GetDecimal() : 0
+            };
+            
+            var stockContent = new StringContent(JsonSerializer.Serialize(stockData), Encoding.UTF8, "application/json");
+            await httpClient.PostAsync("stock", stockContent);
+        }
     }
     
     return Results.Content(result, "application/json");
@@ -245,6 +285,8 @@ app.MapGet("/clientes", async (string? search = null) =>
     
     if (!string.IsNullOrEmpty(search))
         query += $"&or=(nombre.ilike.*{search}*,apellido.ilike.*{search}*,dni.ilike.*{search}*)";
+    
+    query += "&order=nombre.asc";
 
     var response = await httpClient.GetAsync(query);
     response.EnsureSuccessStatusCode();
@@ -257,6 +299,22 @@ app.MapPost("/clientes", async (HttpContext ctx) =>
     var body = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
     var content = new StringContent(body, Encoding.UTF8, "application/json");
     var response = await httpClient.PostAsync("clientes", content);
+    var result = await response.Content.ReadAsStringAsync();
+    return Results.Content(result, "application/json");
+});
+
+app.MapPut("/clientes/{id}", async (Guid id, HttpContext ctx) =>
+{
+    var body = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
+    var content = new StringContent(body, Encoding.UTF8, "application/json");
+    var response = await httpClient.PatchAsync($"clientes?id=eq.{id}", content);
+    var result = await response.Content.ReadAsStringAsync();
+    return Results.Content(result, "application/json");
+});
+
+app.MapDelete("/clientes/{id}", async (Guid id) =>
+{
+    var response = await httpClient.DeleteAsync($"clientes?id=eq.{id}");
     var result = await response.Content.ReadAsStringAsync();
     return Results.Content(result, "application/json");
 });
@@ -288,6 +346,16 @@ app.MapPost("/ventas", async (HttpContext ctx) =>
     return Results.Content(result, "application/json");
 });
 
+// POST detalle de venta (los triggers se encargan de descontar stock automáticamente)
+app.MapPost("/detalle-ventas", async (HttpContext ctx) =>
+{
+    var body = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
+    var content = new StringContent(body, Encoding.UTF8, "application/json");
+    var response = await httpClient.PostAsync("detalle_ventas", content);
+    var result = await response.Content.ReadAsStringAsync();
+    return Results.Content(result, "application/json");
+});
+
 /* ===========================================================
    🔹 REPORTES Y VISTAS
    =========================================================== */
@@ -295,27 +363,98 @@ app.MapPost("/ventas", async (HttpContext ctx) =>
 app.MapGet("/reportes/por-vencer", async () =>
 {
     var response = await httpClient.GetAsync("vista_medicamentos_por_vencer");
-    response.EnsureSuccessStatusCode();
-    var json = await response.Content.ReadAsStringAsync();
-    return Results.Content(json, "application/json");
+    if (response.IsSuccessStatusCode)
+    {
+        var json = await response.Content.ReadAsStringAsync();
+        return Results.Content(json, "application/json");
+    }
+    
+    // Fallback si la vista no existe
+    var fechaLimite = DateTime.Now.AddDays(90).ToString("yyyy-MM-dd");
+    var fallbackResponse = await httpClient.GetAsync($"stock?select=*,medicamentos(nombre_comercial,presentacion)&fecha_vencimiento=lte.{fechaLimite}&cantidad=gt.0&order=fecha_vencimiento.asc");
+    var fallbackJson = await fallbackResponse.Content.ReadAsStringAsync();
+    return Results.Content(fallbackJson, "application/json");
 });
 
 // Ventas diarias
 app.MapGet("/reportes/ventas-diarias", async (int dias = 30) =>
 {
     var response = await httpClient.GetAsync($"vista_ventas_diarias?fecha=gte.{DateTime.Now.AddDays(-dias):yyyy-MM-dd}");
-    response.EnsureSuccessStatusCode();
-    var json = await response.Content.ReadAsStringAsync();
-    return Results.Content(json, "application/json");
+    if (response.IsSuccessStatusCode)
+    {
+        var json = await response.Content.ReadAsStringAsync();
+        return Results.Content(json, "application/json");
+    }
+    
+    // Fallback si la vista no existe
+    var fechaInicio = DateTime.Now.AddDays(-dias).ToString("yyyy-MM-dd");
+    var fallbackResponse = await httpClient.GetAsync($"ventas?select=fecha,total&fecha=gte.{fechaInicio}&order=fecha.desc");
+    var fallbackJson = await fallbackResponse.Content.ReadAsStringAsync();
+    return Results.Content(fallbackJson, "application/json");
 });
 
 // Stock crítico (menos de 10 unidades)
 app.MapGet("/reportes/stock-critico", async () =>
 {
-    var response = await httpClient.GetAsync("stock?select=*,medicamentos(nombre_comercial,presentacion)&cantidad=lt.10&cantidad=gt.0");
+    var response = await httpClient.GetAsync("stock?select=*,medicamentos(nombre_comercial,presentacion)&cantidad=lt.10&cantidad=gt.0&order=cantidad.asc");
     response.EnsureSuccessStatusCode();
     var json = await response.Content.ReadAsStringAsync();
     return Results.Content(json, "application/json");
+});
+
+// Resumen del dashboard
+app.MapGet("/reportes/dashboard", async () =>
+{
+    try 
+    {
+        // Total medicamentos
+        var medResponse = await httpClient.GetAsync("medicamentos?select=count");
+        var totalMeds = 0;
+        if (medResponse.IsSuccessStatusCode)
+        {
+            var medJson = await medResponse.Content.ReadAsStringAsync();
+            var medData = JsonSerializer.Deserialize<List<JsonElement>>(medJson);
+            if (medData != null && medData.Count > 0)
+                totalMeds = medData[0].GetProperty("count").GetInt32();
+        }
+        
+        // Stock crítico
+        var stockCriticoResponse = await httpClient.GetAsync("stock?select=count&cantidad=lt.10&cantidad=gt.0");
+        var stockCritico = 0;
+        if (stockCriticoResponse.IsSuccessStatusCode)
+        {
+            var stockJson = await stockCriticoResponse.Content.ReadAsStringAsync();
+            var stockData = JsonSerializer.Deserialize<List<JsonElement>>(stockJson);
+            if (stockData != null && stockData.Count > 0)
+                stockCritico = stockData[0].GetProperty("count").GetInt32();
+        }
+        
+        // Medicamentos por vencer (próximos 90 días)
+        var fechaLimite = DateTime.Now.AddDays(90).ToString("yyyy-MM-dd");
+        var porVencerResponse = await httpClient.GetAsync($"stock?select=count&fecha_vencimiento=lte.{fechaLimite}&cantidad=gt.0");
+        var porVencer = 0;
+        if (porVencerResponse.IsSuccessStatusCode)
+        {
+            var vencerJson = await porVencerResponse.Content.ReadAsStringAsync();
+            var vencerData = JsonSerializer.Deserialize<List<JsonElement>>(vencerJson);
+            if (vencerData != null && vencerData.Count > 0)
+                porVencer = vencerData[0].GetProperty("count").GetInt32();
+        }
+        
+        var resumen = new
+        {
+            total_medicamentos = totalMeds,
+            stock_critico = stockCritico,
+            por_vencer = porVencer,
+            fecha_actualizacion = DateTime.Now
+        };
+        
+        return Results.Ok(resumen);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem($"Error al generar reporte: {ex.Message}");
+    }
 });
 
 app.Run();
