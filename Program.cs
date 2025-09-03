@@ -26,5 +26,29 @@ app.MapGet("/medicamentos", async () =>
     var medicamentos = JsonSerializer.Deserialize<object>(json);
     return Results.Ok(medicamentos);
 });
+app.MapGet("/stock", async () =>
+{
+    var response = await httpClient.GetAsync(
+        "stock?select=medicamentos(nombre_comercial,presentacion),cantidad"
+    );
+    response.EnsureSuccessStatusCode();
+
+    var json = await response.Content.ReadAsStringAsync();
+    var registros = JsonSerializer.Deserialize<List<JsonElement>>(json);
+
+    // Agrupar stock por medicamento
+    var resultado = registros
+        .GroupBy(r => new {
+            nombre = r.GetProperty("medicamentos").GetProperty("nombre_comercial").GetString(),
+            presentacion = r.GetProperty("medicamentos").GetProperty("presentacion").GetString()
+        })
+        .Select(g => new {
+            nombre_comercial = g.Key.nombre,
+            presentacion = g.Key.presentacion,
+            stock_total = g.Sum(x => x.GetProperty("cantidad").GetInt32())
+        });
+
+    return Results.Ok(resultado);
+});
 
 app.Run();
