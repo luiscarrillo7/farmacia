@@ -30,7 +30,7 @@ httpClient.DefaultRequestHeaders.Add("apikey", supabaseKey);
 var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
 // ✅ Endpoint raíz
-app.MapGet("/", () => "✅ Minimal API conectada a Supabase!");
+app.MapGet("/", () => "✅ Minimal API conectada a Supabse!");
 
 /* ===========================================================
    🔹 LOGIN
