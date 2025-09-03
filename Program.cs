@@ -26,7 +26,7 @@ app.MapGet("/medicamentos", async () =>
     var medicamentos = JsonSerializer.Deserialize<object>(json);
     return Results.Ok(medicamentos);
 });
-app.MapGet("/stock", async () =>
+app.MapGet("/stock", async (int? min, int? max) =>
 {
     var response = await httpClient.GetAsync(
         "stock?select=medicamentos(nombre_comercial,presentacion),cantidad"
@@ -36,7 +36,6 @@ app.MapGet("/stock", async () =>
     var json = await response.Content.ReadAsStringAsync();
     var registros = JsonSerializer.Deserialize<List<JsonElement>>(json);
 
-    // Agrupar stock por medicamento
     var resultado = registros
         .GroupBy(r => new {
             nombre = r.GetProperty("medicamentos").GetProperty("nombre_comercial").GetString(),
@@ -48,7 +47,15 @@ app.MapGet("/stock", async () =>
             stock_total = g.Sum(x => x.GetProperty("cantidad").GetInt32())
         });
 
+    // Aplicar filtros opcionales
+    if (min.HasValue)
+        resultado = resultado.Where(r => r.stock_total >= min.Value);
+
+    if (max.HasValue)
+        resultado = resultado.Where(r => r.stock_total <= max.Value);
+
     return Results.Ok(resultado);
 });
+
 
 app.Run();
