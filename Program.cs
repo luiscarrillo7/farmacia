@@ -61,16 +61,38 @@ app.MapPost("/login", async (HttpContext ctx) =>
     // Generar token básico (puedes cambiarlo a JWT luego)
     var token = Convert.ToBase64String(Guid.NewGuid().ToByteArray());
 
-    return Results.Ok(new { token, nombre = usuario.GetProperty("nombre").GetString() });
+    return Results.Ok(new { 
+        token, 
+        nombre = usuario.GetProperty("nombre").GetString(),
+        rol = usuario.GetProperty("rol").GetString(),
+        id = usuario.GetProperty("id").GetString()
+    });
 });
 
 /* ===========================================================
    🔹 CRUD MEDICAMENTOS
    =========================================================== */
-// GET
-app.MapGet("/medicamentos", async () =>
+// GET con filtros opcionales
+app.MapGet("/medicamentos", async (string? categoria = null, string? search = null) =>
 {
-    var response = await httpClient.GetAsync("medicamentos?select=*");
+    var query = "medicamentos?select=*,proveedores(nombre)";
+    
+    if (!string.IsNullOrEmpty(categoria))
+        query += $"&categoria=eq.{categoria}";
+    
+    if (!string.IsNullOrEmpty(search))
+        query += $"&or=(nombre_comercial.ilike.*{search}*,nombre_generico.ilike.*{search}*)";
+
+    var response = await httpClient.GetAsync(query);
+    response.EnsureSuccessStatusCode();
+    var json = await response.Content.ReadAsStringAsync();
+    return Results.Content(json, "application/json");
+});
+
+// GET por ID
+app.MapGet("/medicamentos/{id}", async (Guid id) =>
+{
+    var response = await httpClient.GetAsync($"medicamentos?id=eq.{id}&select=*,proveedores(nombre)");
     response.EnsureSuccessStatusCode();
     var json = await response.Content.ReadAsStringAsync();
     return Results.Content(json, "application/json");
@@ -105,63 +127,195 @@ app.MapDelete("/medicamentos/{id}", async (Guid id) =>
 });
 
 /* ===========================================================
-   🔹 CRUD MOVIMIENTOS DE STOCK
+   🔹 PROVEEDORES
    =========================================================== */
-// GET
-app.MapGet("/movimientos", async () =>
+app.MapGet("/proveedores", async () =>
 {
-    var response = await httpClient.GetAsync("movimientos_stock?select=*");
+    var response = await httpClient.GetAsync("proveedores?select=*");
     response.EnsureSuccessStatusCode();
     var json = await response.Content.ReadAsStringAsync();
     return Results.Content(json, "application/json");
 });
 
-// POST (registrar ingreso o salida)
-app.MapPost("/movimientos", async (HttpContext ctx) =>
+app.MapPost("/proveedores", async (HttpContext ctx) =>
 {
     var body = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
     var content = new StringContent(body, Encoding.UTF8, "application/json");
-    var response = await httpClient.PostAsync("movimientos_stock", content);
+    var response = await httpClient.PostAsync("proveedores", content);
     var result = await response.Content.ReadAsStringAsync();
     return Results.Content(result, "application/json");
 });
 
 /* ===========================================================
-   🔹 STOCK AGRUPADO
+   🔹 STOCK REAL (tabla stock)
    =========================================================== */
-app.MapGet("/stock", async () =>
+app.MapGet("/stock", async (bool? porVencer = null) =>
+{
+    var query = "stock?select=*,medicamentos(nombre_comercial,nombre_generico,presentacion)&cantidad=gt.0";
+    
+    // Filtro para medicamentos por vencer (próximos 90 días)
+    if (porVencer == true)
+    {
+        var fechaLimite = DateTime.Now.AddDays(90).ToString("yyyy-MM-dd");
+        query += $"&fecha_vencimiento=lte.{fechaLimite}";
+    }
+    
+    query += "&order=fecha_vencimiento.asc";
+
+    var response = await httpClient.GetAsync(query);
+    response.EnsureSuccessStatusCode();
+    var json = await response.Content.ReadAsStringAsync();
+    return Results.Content(json, "application/json");
+});
+
+// Stock por medicamento específico
+app.MapGet("/stock/medicamento/{medicamentoId}", async (Guid medicamentoId) =>
 {
     var response = await httpClient.GetAsync(
-        "movimientos_stock?select=medicamentos(nombre_comercial,presentacion),lote,fecha_vencimiento,cantidad,tipo"
+        $"stock?medicamento_id=eq.{medicamentoId}&select=*&cantidad=gt.0&order=fecha_vencimiento.asc"
     );
     response.EnsureSuccessStatusCode();
-
     var json = await response.Content.ReadAsStringAsync();
-    var registros = JsonSerializer.Deserialize<List<JsonElement>>(json);
+    return Results.Content(json, "application/json");
+});
 
-    var resultado = registros!
-        .GroupBy(r => new
-        {
-            nombre = r.GetProperty("medicamentos").GetProperty("nombre_comercial").GetString(),
-            presentacion = r.GetProperty("medicamentos").GetProperty("presentacion").GetString(),
-            lote = r.GetProperty("lote").GetString(),
-            vencimiento = r.GetProperty("fecha_vencimiento").GetDateTime()
-        })
-        .Select(g => new
-        {
-            nombre_comercial = g.Key.nombre,
-            presentacion = g.Key.presentacion,
-            lote = g.Key.lote,
-            fecha_vencimiento = g.Key.vencimiento,
-            stock_total = g.Sum(x =>
-            {
-                var tipo = x.GetProperty("tipo").GetString();
-                var cantidad = x.GetProperty("cantidad").GetInt32();
-                return tipo == "INGRESO" ? cantidad : -cantidad;
-            })
-        });
+// Ingreso de stock
+app.MapPost("/stock", async (HttpContext ctx) =>
+{
+    var body = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
+    var content = new StringContent(body, Encoding.UTF8, "application/json");
+    var response = await httpClient.PostAsync("stock", content);
+    var result = await response.Content.ReadAsStringAsync();
+    return Results.Content(result, "application/json");
+});
 
-    return Results.Ok(resultado);
+/* ===========================================================
+   🔹 MOVIMIENTOS DE STOCK (historial)
+   =========================================================== */
+app.MapGet("/movimientos", async (string? tipo = null) =>
+{
+    var query = "movimientos_stock?select=*,medicamentos(nombre_comercial,presentacion)";
+    
+    if (!string.IsNullOrEmpty(tipo))
+        query += $"&tipo=eq.{tipo}";
+    
+    query += "&order=fecha_movimiento.desc";
+
+    var response = await httpClient.GetAsync(query);
+    response.EnsureSuccessStatusCode();
+    var json = await response.Content.ReadAsStringAsync();
+    return Results.Content(json, "application/json");
+});
+
+app.MapPost("/movimientos", async (HttpContext ctx) =>
+{
+    var body = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
+    var content = new StringContent(body, Encoding.UTF8, "application/json");
+    
+    // Registrar el movimiento
+    var response = await httpClient.PostAsync("movimientos_stock", content);
+    var result = await response.Content.ReadAsStringAsync();
+    
+    // Si es un ingreso, también agregar/actualizar en la tabla stock
+    var movimiento = JsonSerializer.Deserialize<JsonElement>(body);
+    if (movimiento.GetProperty("tipo").GetString() == "INGRESO")
+    {
+        var stockData = new
+        {
+            medicamento_id = movimiento.GetProperty("medicamento_id").GetString(),
+            lote = movimiento.GetProperty("lote").GetString(),
+            fecha_vencimiento = movimiento.GetProperty("fecha_vencimiento").GetString(),
+            cantidad = movimiento.GetProperty("cantidad").GetInt32(),
+            precio_unitario = movimiento.TryGetProperty("precio_unitario", out var precio) ? precio.GetDecimal() : 0
+        };
+        
+        var stockContent = new StringContent(JsonSerializer.Serialize(stockData), Encoding.UTF8, "application/json");
+        await httpClient.PostAsync("stock", stockContent);
+    }
+    
+    return Results.Content(result, "application/json");
+});
+
+/* ===========================================================
+   🔹 CLIENTES
+   =========================================================== */
+app.MapGet("/clientes", async (string? search = null) =>
+{
+    var query = "clientes?select=*";
+    
+    if (!string.IsNullOrEmpty(search))
+        query += $"&or=(nombre.ilike.*{search}*,apellido.ilike.*{search}*,dni.ilike.*{search}*)";
+
+    var response = await httpClient.GetAsync(query);
+    response.EnsureSuccessStatusCode();
+    var json = await response.Content.ReadAsStringAsync();
+    return Results.Content(json, "application/json");
+});
+
+app.MapPost("/clientes", async (HttpContext ctx) =>
+{
+    var body = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
+    var content = new StringContent(body, Encoding.UTF8, "application/json");
+    var response = await httpClient.PostAsync("clientes", content);
+    var result = await response.Content.ReadAsStringAsync();
+    return Results.Content(result, "application/json");
+});
+
+/* ===========================================================
+   🔹 VENTAS
+   =========================================================== */
+app.MapGet("/ventas", async (string? fecha = null) =>
+{
+    var query = "ventas?select=*,clientes(nombre,apellido,dni),usuarios(nombre,apellido),detalle_ventas(cantidad,precio_unitario,subtotal,stock(medicamentos(nombre_comercial)))";
+    
+    if (!string.IsNullOrEmpty(fecha))
+        query += $"&fecha=gte.{fecha}&fecha=lt.{DateTime.Parse(fecha).AddDays(1):yyyy-MM-dd}";
+    
+    query += "&order=fecha.desc";
+
+    var response = await httpClient.GetAsync(query);
+    response.EnsureSuccessStatusCode();
+    var json = await response.Content.ReadAsStringAsync();
+    return Results.Content(json, "application/json");
+});
+
+app.MapPost("/ventas", async (HttpContext ctx) =>
+{
+    var body = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
+    var content = new StringContent(body, Encoding.UTF8, "application/json");
+    var response = await httpClient.PostAsync("ventas", content);
+    var result = await response.Content.ReadAsStringAsync();
+    return Results.Content(result, "application/json");
+});
+
+/* ===========================================================
+   🔹 REPORTES Y VISTAS
+   =========================================================== */
+// Medicamentos por vencer
+app.MapGet("/reportes/por-vencer", async () =>
+{
+    var response = await httpClient.GetAsync("vista_medicamentos_por_vencer");
+    response.EnsureSuccessStatusCode();
+    var json = await response.Content.ReadAsStringAsync();
+    return Results.Content(json, "application/json");
+});
+
+// Ventas diarias
+app.MapGet("/reportes/ventas-diarias", async (int dias = 30) =>
+{
+    var response = await httpClient.GetAsync($"vista_ventas_diarias?fecha=gte.{DateTime.Now.AddDays(-dias):yyyy-MM-dd}");
+    response.EnsureSuccessStatusCode();
+    var json = await response.Content.ReadAsStringAsync();
+    return Results.Content(json, "application/json");
+});
+
+// Stock crítico (menos de 10 unidades)
+app.MapGet("/reportes/stock-critico", async () =>
+{
+    var response = await httpClient.GetAsync("stock?select=*,medicamentos(nombre_comercial,presentacion)&cantidad=lt.10&cantidad=gt.0");
+    response.EnsureSuccessStatusCode();
+    var json = await response.Content.ReadAsStringAsync();
+    return Results.Content(json, "application/json");
 });
 
 app.Run();
