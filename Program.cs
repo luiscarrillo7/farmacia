@@ -4,30 +4,25 @@ using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 🔹 CORS SOLO para tu frontend en Vercel y localhost (desarrollo)
+// 🔹 CORS SOLO para tu frontend en Vercel
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowFrontend",
+    options.AddPolicy("AllowVercel",
         policy => policy
-            .WithOrigins(
-                "https://farmacia-frontend-phi.vercel.app",
-                "http://localhost:5173"
-            )
+            .WithOrigins("https://farmacia-frontend-phi.vercel.app")
             .AllowAnyMethod()
             .AllowAnyHeader());
 });
 
 var app = builder.Build();
-app.UseCors("AllowFrontend");
+app.UseCors("AllowVercel");
 
 // Configuración de Supabase
 var supabaseUrl = Environment.GetEnvironmentVariable("SUPABASE_URL");
 var supabaseKey = Environment.GetEnvironmentVariable("SUPABASE_KEY");
 
 if (string.IsNullOrEmpty(supabaseUrl) || string.IsNullOrEmpty(supabaseKey))
-{
     throw new Exception("⚠️ SUPABASE_URL o SUPABASE_KEY no configurados.");
-}
 
 var httpClient = new HttpClient
 {
@@ -50,7 +45,7 @@ app.MapPost("/login", async (HttpContext ctx) =>
     {
         var body = await JsonSerializer.DeserializeAsync<Dictionary<string, string>>(ctx.Request.Body);
         if (body == null || !body.ContainsKey("dni") || !body.ContainsKey("password"))
-            return Results.BadRequest(new { error = "DNI y password requeridos" });
+            return Results.BadRequest(new { message = "DNI y password requeridos" });
 
         var dni = body["dni"];
         var password = body["password"];
@@ -80,7 +75,7 @@ app.MapPost("/login", async (HttpContext ctx) =>
     }
     catch (Exception ex)
     {
-        return Results.BadRequest(new { error = $"Error en login: {ex.Message}" });
+        return Results.Problem($"Error en login: {ex.Message}");
     }
 });
 
@@ -105,7 +100,7 @@ app.MapGet("/medicamentos", async (string? categoria = null, string? search = nu
     }
     catch (Exception ex)
     {
-        return Results.BadRequest(new { error = $"Error en medicamentos: {ex.Message}" });
+        return Results.Problem($"Error en medicamentos: {ex.Message}");
     }
 });
 
@@ -120,7 +115,7 @@ app.MapGet("/stock", async (bool? porVencer = null) =>
 
         if (porVencer == true)
         {
-            var fechaLimite = DateTime.UtcNow.AddDays(90).ToString("yyyy-MM-dd");
+            var fechaLimite = DateTime.Now.AddDays(90).ToString("yyyy-MM-dd");
             query.Append($"&fecha_vencimiento=lte.{fechaLimite}");
         }
 
@@ -132,7 +127,7 @@ app.MapGet("/stock", async (bool? porVencer = null) =>
     }
     catch (Exception ex)
     {
-        return Results.BadRequest(new { error = $"Error en stock: {ex.Message}" });
+        return Results.Problem($"Error en stock: {ex.Message}");
     }
 });
 
@@ -149,7 +144,7 @@ app.MapGet("/clientes", async () =>
     }
     catch (Exception ex)
     {
-        return Results.BadRequest(new { error = $"Error en clientes: {ex.Message}" });
+        return Results.Problem($"Error en clientes: {ex.Message}");
     }
 });
 
@@ -166,7 +161,7 @@ app.MapGet("/proveedores", async () =>
     }
     catch (Exception ex)
     {
-        return Results.BadRequest(new { error = $"Error en proveedores: {ex.Message}" });
+        return Results.Problem($"Error en proveedores: {ex.Message}");
     }
 });
 
@@ -178,7 +173,7 @@ app.MapPost("/movimientos", async (HttpContext ctx) =>
     try
     {
         var body = await JsonSerializer.DeserializeAsync<JsonElement>(ctx.Request.Body);
-        if (body.ValueKind == JsonValueKind.Undefined) return Results.BadRequest(new { error = "JSON inválido" });
+        if (body.ValueKind == JsonValueKind.Undefined) return Results.BadRequest("JSON inválido");
 
         var movimiento = new
         {
@@ -190,29 +185,54 @@ app.MapPost("/movimientos", async (HttpContext ctx) =>
         };
 
         var content = new StringContent(JsonSerializer.Serialize(movimiento), Encoding.UTF8, "application/json");
-        var request = new HttpRequestMessage(HttpMethod.Post, "movimientos") { Content = content };
-        request.Headers.Add("Prefer", "return=representation");
-
-        var response = await httpClient.SendAsync(request);
+        var response = await httpClient.PostAsync("movimientos", content);
         response.EnsureSuccessStatusCode();
 
         return Results.Ok(new { message = "✅ Movimiento registrado" });
     }
     catch (Exception ex)
     {
-        return Results.BadRequest(new { error = $"Error en movimientos: {ex.Message}" });
+        return Results.Problem($"Error en movimientos: {ex.Message}");
     }
 });
 
 /* ===========================================================
    🔹 VENTAS (CABECERA + DETALLE)
    =========================================================== */
+app.MapGet("/ventas", async () =>
+{
+    try
+    {
+        var response = await httpClient.GetAsync("ventas?select=*,clientes(nombre),usuarios(nombre)");
+        response.EnsureSuccessStatusCode();
+        return Results.Content(await response.Content.ReadAsStringAsync(), "application/json");
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem($"Error al obtener ventas: {ex.Message}");
+    }
+});
+
+app.MapGet("/ventas/{id}", async (Guid id) =>
+{
+    try
+    {
+        var response = await httpClient.GetAsync($"ventas?id=eq.{id}&select=*,clientes(*),usuarios(*),detalle_ventas(*,stock(*,medicamentos(*)))");
+        response.EnsureSuccessStatusCode();
+        return Results.Content(await response.Content.ReadAsStringAsync(), "application/json");
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem($"Error al obtener venta: {ex.Message}");
+    }
+});
+
 app.MapPost("/ventas", async (HttpContext ctx) =>
 {
     try
     {
         var body = await JsonSerializer.DeserializeAsync<JsonElement>(ctx.Request.Body);
-        if (body.ValueKind == JsonValueKind.Undefined) return Results.BadRequest(new { error = "JSON inválido" });
+        if (body.ValueKind == JsonValueKind.Undefined) return Results.BadRequest("JSON inválido");
 
         var clienteId = body.TryGetProperty("cliente_id", out var c) ? c.GetString() : null;
         var usuarioId = body.GetProperty("usuario_id").GetString();
@@ -228,10 +248,7 @@ app.MapPost("/ventas", async (HttpContext ctx) =>
         };
 
         var ventaContent = new StringContent(JsonSerializer.Serialize(ventaData), Encoding.UTF8, "application/json");
-        var requestVenta = new HttpRequestMessage(HttpMethod.Post, "ventas") { Content = ventaContent };
-        requestVenta.Headers.Add("Prefer", "return=representation");
-
-        var ventaResponse = await httpClient.SendAsync(requestVenta);
+        var ventaResponse = await httpClient.PostAsync("ventas", ventaContent);
         ventaResponse.EnsureSuccessStatusCode();
 
         var ventaJson = await ventaResponse.Content.ReadAsStringAsync();
@@ -253,24 +270,19 @@ app.MapPost("/ventas", async (HttpContext ctx) =>
             total += detalle.cantidad * detalle.precio_unitario;
 
             var detalleContent = new StringContent(JsonSerializer.Serialize(detalle), Encoding.UTF8, "application/json");
-            var requestDetalle = new HttpRequestMessage(HttpMethod.Post, "detalle_ventas") { Content = detalleContent };
-            requestDetalle.Headers.Add("Prefer", "return=representation");
-
-            await httpClient.SendAsync(requestDetalle);
+            await httpClient.PostAsync("detalle_ventas", detalleContent);
         }
 
-        // Actualizar total con PATCH
+        // Actualizar total
         var updateData = new { total };
         var updateContent = new StringContent(JsonSerializer.Serialize(updateData), Encoding.UTF8, "application/json");
-        var requestUpdate = new HttpRequestMessage(new HttpMethod("PATCH"), $"ventas?id=eq.{ventaId}") { Content = updateContent };
-        var updateResponse = await httpClient.SendAsync(requestUpdate);
-        updateResponse.EnsureSuccessStatusCode();
+        await httpClient.PatchAsync($"ventas?id=eq.{ventaId}", updateContent);
 
         return Results.Ok(new { message = "✅ Venta registrada", ventaId, total });
     }
     catch (Exception ex)
     {
-        return Results.BadRequest(new { error = $"Error al registrar venta: {ex.Message}" });
+        return Results.Problem($"Error al registrar venta: {ex.Message}");
     }
 });
 
@@ -281,7 +293,7 @@ app.MapGet("/reportes/ventas-diarias", async (int dias = 30) =>
 {
     try
     {
-        var desde = DateTime.UtcNow.AddDays(-dias).ToString("yyyy-MM-dd");
+        var desde = DateTime.Now.AddDays(-dias).ToString("yyyy-MM-dd");
         var response = await httpClient.GetAsync($"vista_ventas_diarias?fecha=gte.{desde}");
         if (!response.IsSuccessStatusCode)
         {
@@ -293,7 +305,7 @@ app.MapGet("/reportes/ventas-diarias", async (int dias = 30) =>
     }
     catch (Exception ex)
     {
-        return Results.BadRequest(new { error = $"Error en reporte ventas diarias: {ex.Message}" });
+        return Results.Problem($"Error en reporte ventas diarias: {ex.Message}");
     }
 });
 
