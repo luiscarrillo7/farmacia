@@ -61,7 +61,7 @@ app.MapGet("/me", async (HttpContext httpContext, IHttpClientFactory factory) =>
 }).RequireAuthorization();
 
 app.MapGet("/medicamentos", async (IHttpClientFactory factory) => 
-    await HandleSupabaseRequest(http => http.GetAsync("medicamentos?select=*&order=nombre"), factory));
+    await HandleSupabaseRequest(http => http.GetAsync("medicamentos_con_stock?select=*&order=nombre"), factory));
 app.MapGet("/medicamentos/{id}", async (long id, IHttpClientFactory factory) => 
     await HandleSupabaseRequest(http => http.GetAsync($"medicamentos?id=eq.{id}&select=*"), factory));
 
