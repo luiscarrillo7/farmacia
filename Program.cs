@@ -52,7 +52,7 @@ if (app.Environment.IsDevelopment()) {
 }
 
 // --- ENDPOINTS ---
-app.MapGet("/", () => Results.Ok(new { status = "✅ Farmacia API activa" }));
+app.MapGet("/", () => Results.Ok(new { status = "✅ Farmacia API activa 2" }));
 
 app.MapGet("/me", async (HttpContext httpContext, IHttpClientFactory factory) => {
     var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
