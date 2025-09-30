@@ -123,38 +123,44 @@ app.MapDelete("/medicamentos/{id}", async (long id, IHttpClientFactory factory) 
 app.MapGet("/lotes", async (IHttpClientFactory factory) => 
     await HandleSupabaseRequest(http => http.GetAsync("lotes?select=*,medicamentos(*),proveedores(nombre)&cantidad_actual=gt.0&order=fecha_vencimiento.asc"), factory));
 // POST - Crear un nuevo lote
-app.MapPost("/lotes", async ([FromBody] LoteRequest request, IHttpClientFactory factory) =>
+app.MapPost("/lotes", async (HttpContext context, IHttpClientFactory factory) =>
 {
-    if (request.MedicamentoId <= 0)
-        return Results.BadRequest("El medicamento es requerido.");
-    if (request.ProovedorId <= 0)
-        return Results.BadRequest("El proveedor es requerido.");
-    if (request.CantidaInicial <= 0)
-        return Results.BadRequest("La cantidad inicial debe ser mayor a 0.");
-    if (request.PrecioCompra <= 0)
-        return Results.BadRequest("El precio de compra debe ser mayor a 0.");
-
-    return await HandleSupabaseRequest(async http =>
+    try
     {
-        var payload = new {
-            medicamento_id   = request.MedicamentoId,
-            proovedor_id     = request.ProovedorId,
-            fecha_ingreso    = request.FechaIngreso,
-            fecha_vencimiento= request.FechaVencimiento,
-            cantida_inicial  = request.CantidaInicial,
-            cantida_actual   = request.CantidaActual,
-            precio_compra    = request.PrecioCompra
-        };
+        var lote = await context.Request.ReadFromJsonAsync<LoteRequest>();
+        if (lote == null)
+        {
+            return Results.BadRequest(new { detail = "Datos del lote inválidos" });
+        }
 
-        var content = new StringContent(
-            JsonSerializer.Serialize(payload),
-            Encoding.UTF8,
-            "application/json"
-        );
+        // Validaciones simples
+        if (lote.cantidad_inicial < 0 || lote.cantidad_actual < 0)
+            return Results.BadRequest(new { detail = "Las cantidades no pueden ser negativas" });
 
-        return await http.PostAsync("lotes", content);
-    }, factory);
-}).RequireAuthorization();
+        if (lote.precio_compra <= 0)
+            return Results.BadRequest(new { detail = "El precio de compra debe ser mayor a 0" });
+
+        var client = factory.CreateClient("supabase");
+
+        var response = await client.PostAsJsonAsync("lotes", lote);
+
+        if (response.IsSuccessStatusCode)
+        {
+            var result = await response.Content.ReadFromJsonAsync<object>();
+            return Results.Ok(result);
+        }
+        else
+        {
+            var error = await response.Content.ReadAsStringAsync();
+            return Results.Problem(detail: error, statusCode: (int)response.StatusCode);
+        }
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(detail: ex.Message, statusCode: 500);
+    }
+});
+
 
 app.MapGet("/clientes", async (IHttpClientFactory factory) => 
     await HandleSupabaseRequest(http => http.GetAsync("clientes?select=*&order=apellido,nombre"), factory));
@@ -240,30 +246,11 @@ public class MedicamentoRequest
 }
 public class LoteRequest
 {
-    [JsonPropertyName("medicamentoId")]
-    [Required]
-    public long MedicamentoId { get; set; }
-
-    [JsonPropertyName("proovedorId")]
-    [Required]
-    public long ProovedorId { get; set; }
-
-    [JsonPropertyName("fechaIngreso")]
-    [Required]
-    public DateTime FechaIngreso { get; set; }
-
-    [JsonPropertyName("fechaVencimiento")]
-    [Required]
-    public DateTime FechaVencimiento { get; set; }
-
-    [JsonPropertyName("cantidaInicial")]
-    [Required]
-    public int CantidaInicial { get; set; }
-
-    [JsonPropertyName("cantidaActual")]
-    public int CantidaActual { get; set; }
-
-    [JsonPropertyName("precioCompra")]
-    [Required]
-    public decimal PrecioCompra { get; set; }
+    public int medicamento_id { get; set; }
+    public int proveedor_id { get; set; }
+    public DateTime fecha_ingreso { get; set; }
+    public DateTime fecha_vencimiento { get; set; }
+    public int cantidad_inicial { get; set; }
+    public int cantidad_actual { get; set; }
+    public decimal precio_compra { get; set; }
 }
