@@ -60,6 +60,7 @@ app.MapGet("/me", async (HttpContext httpContext, IHttpClientFactory factory) =>
     return await HandleSupabaseRequest(http => http.GetAsync($"perfiles?id=eq.{userId}&select=*"), factory);
 }).RequireAuthorization();
 
+
 app.MapGet("/medicamentos", async (IHttpClientFactory factory) => 
     await HandleSupabaseRequest(http => http.GetAsync("medicamentos_con_stock?select=*&order=nombre"), factory));
 app.MapGet("/medicamentos/{id}", async (long id, IHttpClientFactory factory) => 
@@ -121,6 +122,39 @@ app.MapDelete("/medicamentos/{id}", async (long id, IHttpClientFactory factory) 
 
 app.MapGet("/lotes", async (IHttpClientFactory factory) => 
     await HandleSupabaseRequest(http => http.GetAsync("lotes?select=*,medicamentos(*),proveedores(nombre)&cantidad_actual=gt.0&order=fecha_vencimiento.asc"), factory));
+// POST - Crear un nuevo lote
+app.MapPost("/lotes", async ([FromBody] LoteRequest request, IHttpClientFactory factory) =>
+{
+    if (request.MedicamentoId <= 0)
+        return Results.BadRequest("El medicamento es requerido.");
+    if (request.ProovedorId <= 0)
+        return Results.BadRequest("El proveedor es requerido.");
+    if (request.CantidaInicial <= 0)
+        return Results.BadRequest("La cantidad inicial debe ser mayor a 0.");
+    if (request.PrecioCompra <= 0)
+        return Results.BadRequest("El precio de compra debe ser mayor a 0.");
+
+    return await HandleSupabaseRequest(async http =>
+    {
+        var payload = new {
+            medicamento_id   = request.MedicamentoId,
+            proovedor_id     = request.ProovedorId,
+            fecha_ingreso    = request.FechaIngreso,
+            fecha_vencimiento= request.FechaVencimiento,
+            cantida_inicial  = request.CantidaInicial,
+            cantida_actual   = request.CantidaActual,
+            precio_compra    = request.PrecioCompra
+        };
+
+        var content = new StringContent(
+            JsonSerializer.Serialize(payload),
+            Encoding.UTF8,
+            "application/json"
+        );
+
+        return await http.PostAsync("lotes", content);
+    }, factory);
+}).RequireAuthorization();
 
 app.MapGet("/clientes", async (IHttpClientFactory factory) => 
     await HandleSupabaseRequest(http => http.GetAsync("clientes?select=*&order=apellido,nombre"), factory));
@@ -173,33 +207,63 @@ public class VentaItem
     [Required]
     public int Cantidad { get; set; }
 }
-public class MedicamentoRequest {
+public class MedicamentoRequest
+{
     [JsonPropertyName("nombre")]
     [Required]
     [MaxLength(100)]
     public string Nombre { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("descripcion")]
     public string? Descripcion { get; set; }
-    
+
     [JsonPropertyName("presentacion")]
     [MaxLength(50)]
     public string? Presentacion { get; set; }
-    
+
     [JsonPropertyName("precioCompra")]
     [Required]
     [Range(0.01, double.MaxValue, ErrorMessage = "El precio de compra debe ser mayor a 0")]
     public decimal PrecioCompra { get; set; }
-    
+
     [JsonPropertyName("precioVenta")]
     [Required]
     [Range(0.01, double.MaxValue, ErrorMessage = "El precio de venta debe ser mayor a 0")]
     public decimal PrecioVenta { get; set; }
-    
+
     [JsonPropertyName("stockMinimo")]
     [Range(0, int.MaxValue)]
     public int StockMinimo { get; set; } = 0;
-    
+
     [JsonPropertyName("requiereReceta")]
     public bool RequiereReceta { get; set; } = false;
+}
+public class LoteRequest
+{
+    [JsonPropertyName("medicamentoId")]
+    [Required]
+    public long MedicamentoId { get; set; }
+
+    [JsonPropertyName("proovedorId")]
+    [Required]
+    public long ProovedorId { get; set; }
+
+    [JsonPropertyName("fechaIngreso")]
+    [Required]
+    public DateTime FechaIngreso { get; set; }
+
+    [JsonPropertyName("fechaVencimiento")]
+    [Required]
+    public DateTime FechaVencimiento { get; set; }
+
+    [JsonPropertyName("cantidaInicial")]
+    [Required]
+    public int CantidaInicial { get; set; }
+
+    [JsonPropertyName("cantidaActual")]
+    public int CantidaActual { get; set; }
+
+    [JsonPropertyName("precioCompra")]
+    [Required]
+    public decimal PrecioCompra { get; set; }
 }
