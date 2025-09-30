@@ -129,7 +129,7 @@ app.MapGet("/medicamentos", async (IHttpClientFactory factory) =>
 app.MapGet("/medicamentos/{id}", async (long id, IHttpClientFactory factory) => 
     await HandleSupabaseRequest(http => http.GetAsync($"medicamentos?id=eq.{id}&select=*"), factory));
 
-// POST - Crear nuevo medicamento (ADAPTADO A TU ESTRUCTURA)
+// POST - Crear nuevo medicamento (ADAPTADO A TU ESTRUCTURA DE BD)
 app.MapPost("/medicamentos", async ([FromBody] MedicamentoRequest request, IHttpClientFactory factory, HttpContext httpContext) => {
     Console.WriteLine($"📝 POST /medicamentos - Usuario: {httpContext.User.Identity?.IsAuthenticated}");
     
@@ -156,9 +156,9 @@ app.MapPost("/medicamentos", async ([FromBody] MedicamentoRequest request, IHttp
         var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
         return await http.PostAsync("medicamentos", content);
     }, factory);
-});
+}); // NOTA: Se ha quitado .RequireAuthorization() como solicitaste para las pruebas
 
-// PUT - Actualizar medicamento existente (ADAPTADO A TU ESTRUCTURA)
+// PUT - Actualizar medicamento existente (ADAPTADO A TU ESTRUCTURA DE BD)
 app.MapPut("/medicamentos/{id}", async (long id, [FromBody] MedicamentoRequest request, IHttpClientFactory factory) => {
     if (string.IsNullOrWhiteSpace(request.Nombre))
         return Results.BadRequest(new { error = "El nombre del medicamento es requerido" });
@@ -263,7 +263,7 @@ async Task<IResult> HandleSupabaseRequest(Func<HttpClient, Task<HttpResponseMess
 
 // --- MODELS ---
 
-// Modelo ACTUALIZADO para tu estructura de BD
+// Modelo ACTUALIZADO para coincidir con la estructura de tu tabla 'medicamentos'
 public class MedicamentoRequest
 {
     [JsonPropertyName("nombre")]
