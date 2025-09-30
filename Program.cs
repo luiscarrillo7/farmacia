@@ -123,43 +123,30 @@ app.MapDelete("/medicamentos/{id}", async (long id, IHttpClientFactory factory) 
 app.MapGet("/lotes", async (IHttpClientFactory factory) => 
     await HandleSupabaseRequest(http => http.GetAsync("lotes?select=*,medicamentos(*),proveedores(nombre)&cantidad_actual=gt.0&order=fecha_vencimiento.asc"), factory));
 // POST - Crear un nuevo lote
-app.MapPost("/lotes", async (HttpContext context, IHttpClientFactory factory) =>
+app.MapPost("/lotes", async ([FromBody] LoteRequest request, IHttpClientFactory factory) =>
 {
-    try
+    return await HandleSupabaseRequest(async http =>
     {
-        var lote = await context.Request.ReadFromJsonAsync<LoteRequest>();
-        if (lote == null)
+        // Payload debe coincidir con columnas de la tabla "lotes"
+        var payload = new
         {
-            return Results.BadRequest(new { detail = "Datos del lote inválidos" });
-        }
+            medicamento_id = request.MedicamentoId,
+            proveedor_id = request.ProveedorId,
+            fecha_ingreso = request.FechaIngreso,
+            fecha_vencimiento = request.FechaVencimiento,
+            cantidad_inicial = request.CantidadInicial,
+            cantidad_actual = request.CantidadActual,
+            precio_compra = request.PrecioCompra
+        };
 
-        // Validaciones simples
-        if (lote.cantidad_inicial < 0 || lote.cantidad_actual < 0)
-            return Results.BadRequest(new { detail = "Las cantidades no pueden ser negativas" });
+        var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
 
-        if (lote.precio_compra <= 0)
-            return Results.BadRequest(new { detail = "El precio de compra debe ser mayor a 0" });
+        // Llamada directa a la tabla "lotes"
+        return await http.PostAsync("lotes", content);
 
-        var client = factory.CreateClient("supabase");
-
-        var response = await client.PostAsJsonAsync("lotes", lote);
-
-        if (response.IsSuccessStatusCode)
-        {
-            var result = await response.Content.ReadFromJsonAsync<object>();
-            return Results.Ok(result);
-        }
-        else
-        {
-            var error = await response.Content.ReadAsStringAsync();
-            return Results.Problem(detail: error, statusCode: (int)response.StatusCode);
-        }
-    }
-    catch (Exception ex)
-    {
-        return Results.Problem(detail: ex.Message, statusCode: 500);
-    }
+    }, factory);
 });
+
 
 
 app.MapGet("/clientes", async (IHttpClientFactory factory) => 
@@ -246,11 +233,24 @@ public class MedicamentoRequest
 }
 public class LoteRequest
 {
-    public int medicamento_id { get; set; }
-    public int proveedor_id { get; set; }
-    public DateTime fecha_ingreso { get; set; }
-    public DateTime fecha_vencimiento { get; set; }
-    public int cantidad_inicial { get; set; }
-    public int cantidad_actual { get; set; }
-    public decimal precio_compra { get; set; }
+    [JsonPropertyName("medicamento_id")]
+    public int MedicamentoId { get; set; }
+
+    [JsonPropertyName("proveedor_id")]
+    public int ProveedorId { get; set; }
+
+    [JsonPropertyName("fecha_ingreso")]
+    public DateTime FechaIngreso { get; set; }
+
+    [JsonPropertyName("fecha_vencimiento")]
+    public DateTime FechaVencimiento { get; set; }
+
+    [JsonPropertyName("cantidad_inicial")]
+    public int CantidadInicial { get; set; }
+
+    [JsonPropertyName("cantidad_actual")]
+    public int CantidadActual { get; set; }
+
+    [JsonPropertyName("precio_compra")]
+    public decimal PrecioCompra { get; set; }
 }
