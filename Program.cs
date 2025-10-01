@@ -189,7 +189,9 @@ app.MapDelete("/medicamentos/{id}", async (long id, IHttpClientFactory factory) 
         return await http.DeleteAsync($"medicamentos?id=eq.{id}");
     }, factory);
 }).RequireAuthorization();
-
+// GET - Listar medicamentos con stock (desde la vista)
+app.MapGet("/medicamentos-con-stock", async (IHttpClientFactory factory) => 
+    await HandleSupabaseRequest(http => http.GetAsync("medicamentos_con_stock?select=*&order=nombre"), factory));
 // LOTES
 app.MapGet("/lotes", async (IHttpClientFactory factory) => 
     await HandleSupabaseRequest(http => http.GetAsync("lotes?select=*,medicamentos(*),proveedores(nombre)&cantidad_actual=gt.0&order=fecha_vencimiento.asc"), factory));
