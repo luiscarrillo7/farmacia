@@ -232,15 +232,25 @@ app.MapGet("/ventas", async (IHttpClientFactory factory) =>
     await HandleSupabaseRequest(http => http.GetAsync("ventas?select=*,clientes(nombre,apellido,dni),perfiles(nombre,apellido)&order=fecha.desc"), factory));
 
 app.MapPost("/ventas", async ([FromBody] VentaRequest request, IHttpClientFactory factory) => {
+    Console.WriteLine($"📝 POST /ventas recibido");
+    Console.WriteLine($"📦 Payload: {JsonSerializer.Serialize(request)}");
+    
     if (request.Items == null || !request.Items.Any())
         return Results.BadRequest(new { error = "La venta debe tener al menos un item" });
     
     return await HandleSupabaseRequest(async http => {
-        var payload = new { p_cliente_id = request.ClienteId, p_usuario_id = request.UsuarioId, p_items = request.Items };
+        var payload = new { 
+            p_cliente_id = request.ClienteId, 
+            p_usuario_id = request.UsuarioId, 
+            p_items = request.Items 
+        };
+        
+        Console.WriteLine($"🚀 Enviando a Supabase: {JsonSerializer.Serialize(payload)}");
+        
         var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
         return await http.PostAsync("rpc/registrar_venta_y_actualizar_stock", content);
     }, factory);
-}).RequireAuthorization();
+});
 
 app.Run();
 
