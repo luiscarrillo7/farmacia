@@ -20,18 +20,22 @@ if (string.IsNullOrEmpty(supabaseUrl) || string.IsNullOrEmpty(supabaseKey))
     throw new Exception("Supabase environment variables not configured.");
 
 // --- SERVICES ---
-builder.Services.AddCors(options => {
-    options.AddPolicy("AllowFrontend", policy => {
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowFrontend", policy =>
+    {
         policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader();
     });
 });
 
-builder.Services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(options => {
+builder.Services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(options =>
+{
     options.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
     options.SerializerOptions.PropertyNameCaseInsensitive = true;
 });
 
-builder.Services.AddHttpClient("Supabase", client => {
+builder.Services.AddHttpClient("Supabase", client =>
+{
     client.BaseAddress = new Uri($"{supabaseUrl}/rest/v1/");
     client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", supabaseKey);
     client.DefaultRequestHeaders.Add("apikey", supabaseKey);
@@ -43,10 +47,11 @@ builder.Services.AddSwaggerGen();
 
 // JWT Authentication
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options => {
+    .AddJwtBearer(options =>
+    {
         options.RequireHttpsMetadata = false;
         options.SaveToken = true;
-        
+
         if (!string.IsNullOrEmpty(supabaseJwtSecret))
         {
             var key = Encoding.UTF8.GetBytes(supabaseJwtSecret);
@@ -72,20 +77,6 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 ValidateLifetime = false
             };
         }
-
-        options.Events = new JwtBearerEvents
-        {
-            OnAuthenticationFailed = context =>
-            {
-                Console.WriteLine($"❌ Auth failed: {context.Exception.Message}");
-                return Task.CompletedTask;
-            },
-            OnTokenValidated = context =>
-            {
-                Console.WriteLine($"✅ Token validated");
-                return Task.CompletedTask;
-            }
-        };
     });
 
 builder.Services.AddAuthorization();
@@ -97,103 +88,111 @@ app.UseCors("AllowFrontend");
 app.UseAuthentication();
 app.UseAuthorization();
 
-if (app.Environment.IsDevelopment()) {
+if (app.Environment.IsDevelopment())
+{
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
 // --- ENDPOINTS ---
-app.MapGet("/", () => Results.Ok(new { 
-    status = "✅ Farmacia API activa", 
-    timestamp = DateTime.UtcNow 
+app.MapGet("/", () => Results.Ok(new
+{
+    status = "✅ Farmacia API activa",
+    timestamp = DateTime.UtcNow
 }));
 
-app.MapGet("/me", async (HttpContext httpContext, IHttpClientFactory factory) => {
-    var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier) 
+// --- PERFIL AUTENTICADO ---
+app.MapGet("/me", async (HttpContext httpContext, IHttpClientFactory factory) =>
+{
+    var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier)
                ?? httpContext.User.FindFirstValue("sub")
                ?? httpContext.User.FindFirstValue("user_id");
-               
-    if (string.IsNullOrEmpty(userId)) {
-        Console.WriteLine("❌ No userId found in claims");
+
+    if (string.IsNullOrEmpty(userId))
         return Results.Unauthorized();
-    }
-    
+
     return await HandleSupabaseRequest(http => http.GetAsync($"perfiles?id=eq.{userId}&select=*"), factory);
 }).RequireAuthorization();
 
-// GET - Listar todos los medicamentos
-app.MapGet("/medicamentos", async (IHttpClientFactory factory) => 
-    await HandleSupabaseRequest(http => http.GetAsync("medicamentos?select=*&order=nombre"), factory));
+// --- MEDICAMENTOS ---
+// GET: Listar todos los medicamentos
+app.MapGet("/medicamentos", async (IHttpClientFactory factory) =>
+    await HandleSupabaseRequest(http => http.GetAsync("medicamentos?select=*&order=nombre_comercial"), factory));
 
-// GET - Obtener medicamento por ID
-app.MapGet("/medicamentos/{id}", async (long id, IHttpClientFactory factory) => 
+// GET: Obtener medicamento por ID
+app.MapGet("/medicamentos/{id}", async (long id, IHttpClientFactory factory) =>
     await HandleSupabaseRequest(http => http.GetAsync($"medicamentos?id=eq.{id}&select=*"), factory));
 
-// POST - Crear nuevo medicamento (ADAPTADO A TU ESTRUCTURA DE BD)
-app.MapPost("/medicamentos", async ([FromBody] MedicamentoRequest request, IHttpClientFactory factory, HttpContext httpContext) => {
+// POST: Crear nuevo medicamento
+app.MapPost("/medicamentos", async ([FromBody] MedicamentoRequest request, IHttpClientFactory factory, HttpContext httpContext) =>
+{
     Console.WriteLine($"📝 POST /medicamentos - Usuario: {httpContext.User.Identity?.IsAuthenticated}");
-    
-    // Validaciones
-    if (string.IsNullOrWhiteSpace(request.Nombre))
-        return Results.BadRequest(new { error = "El nombre del medicamento es requerido" });
-    
+
+    if (string.IsNullOrWhiteSpace(request.NombreComercial))
+        return Results.BadRequest(new { error = "El nombre comercial es requerido" });
+
     if (request.PrecioVenta <= 0)
         return Results.BadRequest(new { error = "El precio de venta debe ser mayor a 0" });
-    
-    return await HandleSupabaseRequest(async http => {
-        // Payload adaptado a tu estructura de BD
-        var payload = new {
-            nombre = request.Nombre.Trim(),
-            codigo_comercial = string.IsNullOrWhiteSpace(request.CodigoComercial) ? null : request.CodigoComercial.Trim(),
-            presentacion = string.IsNullOrWhiteSpace(request.Presentacion) ? null : request.Presentacion.Trim(),
-            concentracion = string.IsNullOrWhiteSpace(request.Concentracion) ? null : request.Concentracion.Trim(),
-            categoria = string.IsNullOrWhiteSpace(request.Categoria) ? null : request.Categoria.Trim(),
+
+    return await HandleSupabaseRequest(async http =>
+    {
+        var payload = new
+        {
+            nombre_comercial = request.NombreComercial.Trim(),
+            nombre_generico = request.NombreGenerico?.Trim(),
+            concentracion = request.Concentracion?.Trim(),
+            forma_farmaceutica = request.FormaFarmaceutica?.Trim(),
+            categoria = request.Categoria?.Trim(),
+            laboratorio = request.Laboratorio?.Trim(),
             precio_venta = request.PrecioVenta
         };
-        
+
         Console.WriteLine($"📦 Payload: {JsonSerializer.Serialize(payload)}");
-        
+
         var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
         return await http.PostAsync("medicamentos", content);
     }, factory);
-}); // NOTA: Se ha quitado .RequireAuthorization() como solicitaste para las pruebas
+});
 
-// PUT - Actualizar medicamento existente (ADAPTADO A TU ESTRUCTURA DE BD)
-app.MapPut("/medicamentos/{id}", async (long id, [FromBody] MedicamentoRequest request, IHttpClientFactory factory) => {
-    if (string.IsNullOrWhiteSpace(request.Nombre))
-        return Results.BadRequest(new { error = "El nombre del medicamento es requerido" });
-    
+// PUT: Actualizar medicamento
+app.MapPut("/medicamentos/{id}", async (long id, [FromBody] MedicamentoRequest request, IHttpClientFactory factory) =>
+{
+    if (string.IsNullOrWhiteSpace(request.NombreComercial))
+        return Results.BadRequest(new { error = "El nombre comercial es requerido" });
+
     if (request.PrecioVenta <= 0)
         return Results.BadRequest(new { error = "El precio de venta debe ser mayor a 0" });
-    
-    return await HandleSupabaseRequest(async http => {
-        var payload = new {
-            nombre = request.Nombre.Trim(),
-            codigo_comercial = string.IsNullOrWhiteSpace(request.CodigoComercial) ? null : request.CodigoComercial.Trim(),
-            presentacion = string.IsNullOrWhiteSpace(request.Presentacion) ? null : request.Presentacion.Trim(),
-            concentracion = string.IsNullOrWhiteSpace(request.Concentracion) ? null : request.Concentracion.Trim(),
-            categoria = string.IsNullOrWhiteSpace(request.Categoria) ? null : request.Categoria.Trim(),
+
+    return await HandleSupabaseRequest(async http =>
+    {
+        var payload = new
+        {
+            nombre_comercial = request.NombreComercial.Trim(),
+            nombre_generico = request.NombreGenerico?.Trim(),
+            concentracion = request.Concentracion?.Trim(),
+            forma_farmaceutica = request.FormaFarmaceutica?.Trim(),
+            categoria = request.Categoria?.Trim(),
+            laboratorio = request.Laboratorio?.Trim(),
             precio_venta = request.PrecioVenta
         };
-        
+
         var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
         return await http.PatchAsync($"medicamentos?id=eq.{id}", content);
     }, factory);
 }).RequireAuthorization();
 
-// DELETE - Eliminar medicamento
+// DELETE: Eliminar medicamento
 app.MapDelete("/medicamentos/{id}", async (long id, IHttpClientFactory factory) =>
 {
-    return await HandleSupabaseRequest(async http =>
-    {
-        return await http.DeleteAsync($"medicamentos?id=eq.{id}");
-    }, factory);
+    return await HandleSupabaseRequest(http => http.DeleteAsync($"medicamentos?id=eq.{id}"), factory);
 }).RequireAuthorization();
-// GET - Listar medicamentos con stock (desde la vista)
-app.MapGet("/medicamentos-con-stock", async (IHttpClientFactory factory) => 
-    await HandleSupabaseRequest(http => http.GetAsync("medicamentos_con_stock?select=*&order=nombre"), factory));
-// LOTES
-app.MapGet("/lotes", async (IHttpClientFactory factory) => 
+
+// GET: Vista de medicamentos con stock
+app.MapGet("/medicamentos-con-stock", async (IHttpClientFactory factory) =>
+    await HandleSupabaseRequest(http => http.GetAsync("medicamentos_con_stock?select=*&order=nombre_comercial"), factory));
+
+// --- LOTES ---
+app.MapGet("/lotes", async (IHttpClientFactory factory) =>
     await HandleSupabaseRequest(http => http.GetAsync("lotes?select=*,medicamentos(*),proveedores(nombre)&cantidad_actual=gt.0&order=fecha_vencimiento.asc"), factory));
 
 app.MapPost("/lotes", async ([FromBody] LoteRequest request, IHttpClientFactory factory) =>
@@ -202,7 +201,7 @@ app.MapPost("/lotes", async ([FromBody] LoteRequest request, IHttpClientFactory 
         return Results.BadRequest(new { error = "La cantidad debe ser mayor a 0" });
     if (request.FechaVencimiento <= DateTime.Now)
         return Results.BadRequest(new { error = "La fecha de vencimiento debe ser futura" });
-        
+
     return await HandleSupabaseRequest(async http =>
     {
         var payload = new
@@ -221,32 +220,33 @@ app.MapPost("/lotes", async ([FromBody] LoteRequest request, IHttpClientFactory 
     }, factory);
 }).RequireAuthorization();
 
-// CLIENTES, PROVEEDORES, VENTAS
-app.MapGet("/clientes", async (IHttpClientFactory factory) => 
+// --- CLIENTES, PROVEEDORES Y VENTAS ---
+app.MapGet("/clientes", async (IHttpClientFactory factory) =>
     await HandleSupabaseRequest(http => http.GetAsync("clientes?select=*&order=apellido,nombre"), factory));
 
-app.MapGet("/proveedores", async (IHttpClientFactory factory) => 
+app.MapGet("/proveedores", async (IHttpClientFactory factory) =>
     await HandleSupabaseRequest(http => http.GetAsync("proveedores?select=*&order=nombre"), factory));
 
-app.MapGet("/ventas", async (IHttpClientFactory factory) => 
+app.MapGet("/ventas", async (IHttpClientFactory factory) =>
     await HandleSupabaseRequest(http => http.GetAsync("ventas?select=*,clientes(nombre,apellido,dni),perfiles(nombre,apellido)&order=fecha.desc"), factory));
 
-app.MapPost("/ventas", async ([FromBody] VentaRequest request, IHttpClientFactory factory) => {
+app.MapPost("/ventas", async ([FromBody] VentaRequest request, IHttpClientFactory factory) =>
+{
     Console.WriteLine($"📝 POST /ventas recibido");
     Console.WriteLine($"📦 Payload: {JsonSerializer.Serialize(request)}");
-    
+
     if (request.Items == null || !request.Items.Any())
         return Results.BadRequest(new { error = "La venta debe tener al menos un item" });
-    
-    return await HandleSupabaseRequest(async http => {
-        var payload = new { 
-            p_cliente_id = request.ClienteId, 
-            p_usuario_id = request.UsuarioId, 
-            p_items = request.Items 
+
+    return await HandleSupabaseRequest(async http =>
+    {
+        var payload = new
+        {
+            p_cliente_id = request.ClienteId,
+            p_usuario_id = request.UsuarioId,
+            p_items = request.Items
         };
-        
-        Console.WriteLine($"🚀 Enviando a Supabase: {JsonSerializer.Serialize(payload)}");
-        
+
         var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
         return await http.PostAsync("rpc/registrar_venta_y_actualizar_stock", content);
     }, factory);
@@ -255,71 +255,55 @@ app.MapPost("/ventas", async ([FromBody] VentaRequest request, IHttpClientFactor
 app.Run();
 
 // --- HELPER ---
-async Task<IResult> HandleSupabaseRequest(Func<HttpClient, Task<HttpResponseMessage>> request, IHttpClientFactory factory) {
-    try {
+async Task<IResult> HandleSupabaseRequest(Func<HttpClient, Task<HttpResponseMessage>> request, IHttpClientFactory factory)
+{
+    try
+    {
         using var httpClient = factory.CreateClient("Supabase");
         var response = await request(httpClient);
         var content = await response.Content.ReadAsStringAsync();
-        
-        if (!response.IsSuccessStatusCode) {
+
+        if (!response.IsSuccessStatusCode)
+        {
             Console.WriteLine($"❌ Supabase error: {response.StatusCode} - {content}");
             return Results.Problem(detail: content, statusCode: (int)response.StatusCode);
         }
-        
+
         return Results.Content(content, "application/json");
-    } catch (Exception ex) { 
+    }
+    catch (Exception ex)
+    {
         Console.WriteLine($"❌ Exception: {ex.Message}");
-        return Results.Problem(ex.Message); 
+        return Results.Problem(ex.Message);
     }
 }
 
-// --- MODELS ---
-
-// Modelo ACTUALIZADO para coincidir con la estructura de tu tabla 'medicamentos'
+// --- MODELOS ---
 public class MedicamentoRequest
 {
-    [JsonPropertyName("nombre")]
-    [Required(ErrorMessage = "El nombre es requerido")]
-    public string Nombre { get; set; } = string.Empty;
+    [JsonPropertyName("nombreComercial")]
+    [Required(ErrorMessage = "El nombre comercial es requerido")]
+    public string NombreComercial { get; set; } = string.Empty;
 
-    [JsonPropertyName("codigoComercial")]
-    public string? CodigoComercial { get; set; }
-
-    [JsonPropertyName("presentacion")]
-    public string? Presentacion { get; set; }
+    [JsonPropertyName("nombreGenerico")]
+    [Required(ErrorMessage = "El nombre genérico es requerido")]
+    public string NombreGenerico { get; set; } = string.Empty;
 
     [JsonPropertyName("concentracion")]
     public string? Concentracion { get; set; }
 
+    [JsonPropertyName("formaFarmaceutica")]
+    public string? FormaFarmaceutica { get; set; }
+
     [JsonPropertyName("categoria")]
     public string? Categoria { get; set; }
 
+    [JsonPropertyName("laboratorio")]
+    public string? Laboratorio { get; set; }
+
     [JsonPropertyName("precioVenta")]
-    [Required(ErrorMessage = "El precio de venta es requerido")]
     [Range(0.01, double.MaxValue, ErrorMessage = "El precio debe ser mayor a 0")]
     public decimal PrecioVenta { get; set; }
-}
-
-public class VentaRequest {
-    [JsonPropertyName("usuarioId")]
-    public Guid UsuarioId { get; set; }
-    
-    [JsonPropertyName("clienteId")]
-    public long? ClienteId { get; set; }
-    
-    [JsonPropertyName("items")]
-    [Required]
-    public List<VentaItem> Items { get; set; } = new();
-}
-
-public class VentaItem
-{
-    [JsonPropertyName("medicamento_id")]
-    public long MedicamentoId { get; set; }
-    
-    [JsonPropertyName("cantidad")]
-    [Required]
-    public int Cantidad { get; set; }
 }
 
 public class LoteRequest
@@ -344,4 +328,27 @@ public class LoteRequest
 
     [JsonPropertyName("precio_compra")]
     public decimal PrecioCompra { get; set; }
+}
+
+public class VentaRequest
+{
+    [JsonPropertyName("usuarioId")]
+    public Guid UsuarioId { get; set; }
+
+    [JsonPropertyName("clienteId")]
+    public long? ClienteId { get; set; }
+
+    [JsonPropertyName("items")]
+    [Required]
+    public List<VentaItem> Items { get; set; } = new();
+}
+
+public class VentaItem
+{
+    [JsonPropertyName("medicamento_id")]
+    public long MedicamentoId { get; set; }
+
+    [JsonPropertyName("cantidad")]
+    [Required]
+    public int Cantidad { get; set; }
 }
