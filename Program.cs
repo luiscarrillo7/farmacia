@@ -218,7 +218,7 @@ app.MapPost("/lotes", async ([FromBody] LoteRequest request, IHttpClientFactory 
         var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
         return await http.PostAsync("lotes", content);
     }, factory);
-}).RequireAuthorization();
+});
 
 // --- CLIENTES, PROVEEDORES Y VENTAS ---
 app.MapGet("/clientes", async (IHttpClientFactory factory) =>
