@@ -216,6 +216,8 @@ app.MapPost("/lotes", async ([FromBody] LoteRequest request, IHttpClientFactory 
         };
 
         var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+        Console.WriteLine($"📦 Enviando a Supabase: {JsonSerializer.Serialize(payload)}");
+
         return await http.PostAsync("lotes", content);
     }, factory);
 });
